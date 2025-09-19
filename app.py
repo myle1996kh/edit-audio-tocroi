@@ -34,7 +34,7 @@ def get_audio_info(audio_path):
         return None
 
 def process_audio_ffmpeg(input_path, output_path, target_minutes, crossfade_duration, method="basic_crossfade", progress_callback=None):
-    """Process audio using FFmpeg - EXACT test filter + 3s fade out"""
+    """Process audio using FFmpeg with Streamlit Cloud compatibility"""
 
     target_duration = target_minutes * 60
 
@@ -45,25 +45,38 @@ def process_audio_ffmpeg(input_path, output_path, target_minutes, crossfade_dura
 
     original_duration = info['duration']
 
-    # Calculate loops needed accounting for crossfade overlap
-    # With crossfade, effective duration = first_duration + (loops-1) * (duration - crossfade)
-    effective_duration_per_loop = original_duration - crossfade_duration
-    remaining_duration = target_duration - original_duration
-    additional_loops = max(0, int(remaining_duration / effective_duration_per_loop) + 1)
-    loops_needed = 1 + additional_loops
-
     if progress_callback:
         progress_callback(10, "🔍 Analyzing audio...")
 
-    # Use EXACT same filter as your test with dynamic crossfade
-    if method == "basic_crossfade":
+    # Detect environment and use appropriate method
+    if is_streamlit_cloud():
+        # Streamlit Cloud compatible method - simpler approach
+        if progress_callback:
+            progress_callback(30, "🌐 Streamlit Cloud mode: Simple loop method...")
+
+        # Use simple stream_loop with basic fade
+        fade_start = target_duration - 3
+        cmd = [
+            'ffmpeg', '-stream_loop', '-1', '-i', input_path,
+            '-af', f'afade=t=out:st={fade_start}:d=3',
+            '-t', str(target_duration),
+            '-c:a', 'libmp3lame', '-b:a', '192k',
+            '-y', output_path
+        ]
+    else:
+        # Local development - use advanced crossfade
+        loops_needed = max(2, int(target_duration / original_duration) + 1)
+
+        if progress_callback:
+            progress_callback(30, f"💻 Local mode: Advanced crossfade (loops: {loops_needed})...")
+
         if loops_needed <= 5:
-            # Build inputs
+            # Build inputs for crossfade
             inputs = []
             for i in range(loops_needed):
                 inputs.extend(['-i', input_path])
 
-            # Build filter - EXACT same as test: "[0:a][1:a]acrossfade=d={crossfade_duration}[af1];[af1][2:a]acrossfade=d={crossfade_duration}[af2];[af2][3:a]acrossfade=d={crossfade_duration}[af3];[af3][4:a]acrossfade=d={crossfade_duration}[out]"
+            # Build crossfade filter
             if loops_needed == 2:
                 filter_complex = f"[0:a][1:a]acrossfade=d={crossfade_duration}[out]"
             elif loops_needed == 3:
@@ -72,15 +85,10 @@ def process_audio_ffmpeg(input_path, output_path, target_minutes, crossfade_dura
                 filter_complex = f"[0:a][1:a]acrossfade=d={crossfade_duration}[af1];[af1][2:a]acrossfade=d={crossfade_duration}[af2];[af2][3:a]acrossfade=d={crossfade_duration}[out]"
             elif loops_needed == 5:
                 filter_complex = f"[0:a][1:a]acrossfade=d={crossfade_duration}[af1];[af1][2:a]acrossfade=d={crossfade_duration}[af2];[af2][3:a]acrossfade=d={crossfade_duration}[af3];[af3][4:a]acrossfade=d={crossfade_duration}[out]"
-            else:
-                filter_complex = f"[0:a][1:a]acrossfade=d={crossfade_duration}[out]"
 
-            # Add 3-second fade out at the end
+            # Add fade out
             fade_start = target_duration - 3
             filter_with_fadeout = f"{filter_complex};[out]afade=t=out:st={fade_start}:d=3[final]"
-
-            if progress_callback:
-                progress_callback(30, f"🎵 FFmpeg: acrossfade=d={crossfade_duration} + 3s fadeout...")
 
             cmd = ['ffmpeg'] + inputs + [
                 '-filter_complex', filter_with_fadeout,
@@ -90,51 +98,34 @@ def process_audio_ffmpeg(input_path, output_path, target_minutes, crossfade_dura
                 '-y', output_path
             ]
         else:
-            # For many loops, use concat filter with crossfade
+            # Fallback to simple method for many loops
             fade_start = target_duration - 3
-
-            # Build input files for the loops needed
-            inputs = []
-            for i in range(min(loops_needed, 20)):  # Limit to 20 inputs for performance
-                inputs.extend(['-i', input_path])
-
-            # Build concat filter with crossfades
-            filter_parts = []
-            for i in range(1, min(loops_needed, 20)):
-                if i == 1:
-                    filter_parts.append(f"[0:a][1:a]acrossfade=d={crossfade_duration}[af1]")
-                    last_output = "[af1]"
-                else:
-                    filter_parts.append(f"{last_output}[{i}:a]acrossfade=d={crossfade_duration}[af{i}]")
-                    last_output = f"[af{i}]"
-
-            # Add final fade out
-            filter_parts.append(f"{last_output}afade=t=out:st={fade_start}:d=3[out]")
-            filter_complex = ";".join(filter_parts)
-
-            cmd = ['ffmpeg'] + inputs + [
-                '-filter_complex', filter_complex,
-                '-map', '[out]',
+            cmd = [
+                'ffmpeg', '-stream_loop', '-1', '-i', input_path,
+                '-af', f'afade=t=out:st={fade_start}:d=3',
                 '-t', str(target_duration),
                 '-c:a', 'mp3', '-b:a', '320k',
                 '-y', output_path
             ]
 
     if progress_callback:
-        progress_callback(50, f"⚡ Running FFmpeg with EXACT test filter + 3s fade out...")
+        progress_callback(50, f"⚡ Running FFmpeg...")
 
     # Execute FFmpeg command
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)  # 5 min timeout
 
         if progress_callback:
             progress_callback(90, "✅ Finalizing...")
 
         if result.returncode == 0 and os.path.exists(output_path):
-            return True, f"Success! FFmpeg acrossfade=d={crossfade_duration} + 3s fade out"
+            method_used = "Streamlit Simple Loop" if is_streamlit_cloud() else f"Local Crossfade (d={crossfade_duration})"
+            return True, f"Success! {method_used}"
         else:
-            return False, f"FFmpeg error: {result.stderr[:200]}"
+            return False, f"FFmpeg error: {result.stderr[:200] if result.stderr else 'Unknown error'}"
 
+    except subprocess.TimeoutExpired:
+        return False, "Processing timeout - try shorter duration"
     except Exception as e:
         return False, f"Processing error: {str(e)}"
 
@@ -157,12 +148,20 @@ def format_duration(seconds):
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 def check_ffmpeg():
-    """Check if FFmpeg is available"""
+    """Check if FFmpeg is available and get version info"""
     try:
         result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True, timeout=10)
-        return result.returncode == 0
+        if result.returncode == 0:
+            # Extract version for debugging
+            version_line = result.stdout.split('\n')[0] if result.stdout else "Unknown version"
+            return True, version_line
+        return False, "FFmpeg not working"
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+        return False, "FFmpeg not found"
+
+def is_streamlit_cloud():
+    """Detect if running on Streamlit Cloud"""
+    return os.environ.get('STREAMLIT_SHARING', False) or 'streamlit.io' in os.environ.get('HOSTNAME', '')
 
 def validate_parameters(mode: str, target_duration_ms: int, original_duration_ms: int, crossfade_duration: float, num_files: int) -> tuple[bool, str]:
     """Validate processing parameters based on mode"""
@@ -195,7 +194,8 @@ def main():
     st.title("🎵 Audio Editor")
 
     # Check FFmpeg availability for Streamlit deployment
-    if not check_ffmpeg():
+    ffmpeg_available, ffmpeg_info = check_ffmpeg()
+    if not ffmpeg_available:
         st.error("❌ FFmpeg not found!")
         st.markdown("""
         **For local development:**
@@ -209,7 +209,13 @@ def main():
         """)
         st.stop()
 
-    st.success("✅ FFmpeg ready!")
+    # Show environment info
+    if is_streamlit_cloud():
+        st.success("✅ FFmpeg ready! 🌐 Streamlit Cloud mode (simple loop method)")
+        st.caption(f"FFmpeg: {ffmpeg_info}")
+    else:
+        st.success("✅ FFmpeg ready! 💻 Local mode (advanced crossfade)")
+        st.caption(f"FFmpeg: {ffmpeg_info}")
 
     # Mode selection at the top
     st.markdown("### 🎯 Choose Your Mode")
