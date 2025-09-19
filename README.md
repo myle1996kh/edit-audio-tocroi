@@ -75,3 +75,36 @@ Uses FFmpeg with exact filter specifications:
 - **Python 3.8+**
 - **FFmpeg** (for audio processing)
 - **Streamlit** (for web interface)
+
+## Deployment to Streamlit Cloud
+
+1. **Fork/Clone** this repository
+2. **Connect to Streamlit Cloud**: Go to [share.streamlit.io](https://share.streamlit.io)
+3. **Deploy**: Select your repository and `app.py` as the main file
+4. **FFmpeg Installation**: The `packages.txt` file automatically installs FFmpeg
+5. **Wait for build**: First deployment may take 2-3 minutes to install dependencies
+
+### Important Files for Deployment:
+- `app.py` - Main Streamlit application
+- `requirements.txt` - Python dependencies (just streamlit)
+- `packages.txt` - System packages (FFmpeg installation)
+
+### Deployment Troubleshooting:
+- **FFmpeg not found**: Wait for deployment to complete, packages.txt should install it
+- **Build errors**: Check Streamlit Cloud logs for specific error messages
+- **Timeout**: Large audio files may need processing time limits
+
+## Local Development
+
+```bash
+# Install FFmpeg first
+# Windows: Download from https://ffmpeg.org/download.html
+# macOS: brew install ffmpeg
+# Linux: sudo apt install ffmpeg
+
+# Then install Python requirements
+pip install -r requirements.txt
+
+# Run locally
+streamlit run app.py
+```

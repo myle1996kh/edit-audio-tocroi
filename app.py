@@ -130,6 +130,14 @@ def format_duration(seconds):
     secs = int(seconds % 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
+def check_ffmpeg():
+    """Check if FFmpeg is available"""
+    try:
+        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True, timeout=10)
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
 def validate_parameters(mode: str, target_duration_ms: int, original_duration_ms: int, crossfade_duration: float, num_files: int) -> tuple[bool, str]:
     """Validate processing parameters based on mode"""
 
@@ -158,8 +166,24 @@ def validate_parameters(mode: str, target_duration_ms: int, original_duration_ms
     return True, "Parameters valid"
 
 def main():
-    st.title("🎵 Smart Audio Editor")
-    st.markdown("**Extend • Combine • Optimize** - Your complete audio solution")
+    st.title("🎵 Audio Editor")
+
+    # Check FFmpeg availability for Streamlit deployment
+    if not check_ffmpeg():
+        st.error("❌ FFmpeg not found!")
+        st.markdown("""
+        **For local development:**
+        - Windows: Download from [FFmpeg.org](https://ffmpeg.org/download.html)
+        - macOS: `brew install ffmpeg`
+        - Linux: `sudo apt install ffmpeg`
+
+        **For Streamlit Cloud:**
+        - The `packages.txt` file should automatically install FFmpeg
+        - If this error persists, the deployment may need time to install dependencies
+        """)
+        st.stop()
+
+    st.success("✅ FFmpeg ready!")
 
     # Mode selection at the top
     st.markdown("### 🎯 Choose Your Mode")
