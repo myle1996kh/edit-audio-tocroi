@@ -44,7 +44,13 @@ def process_audio_ffmpeg(input_path, output_path, target_minutes, crossfade_dura
         return False, "Could not analyze audio file"
 
     original_duration = info['duration']
-    loops_needed = int(target_duration / original_duration) + 1
+
+    # Calculate loops needed accounting for crossfade overlap
+    # With crossfade, effective duration = first_duration + (loops-1) * (duration - crossfade)
+    effective_duration_per_loop = original_duration - crossfade_duration
+    remaining_duration = target_duration - original_duration
+    additional_loops = max(0, int(remaining_duration / effective_duration_per_loop) + 1)
+    loops_needed = 1 + additional_loops
 
     if progress_callback:
         progress_callback(10, "🔍 Analyzing audio...")
@@ -84,11 +90,31 @@ def process_audio_ffmpeg(input_path, output_path, target_minutes, crossfade_dura
                 '-y', output_path
             ]
         else:
-            # For many loops + 3s fade out
+            # For many loops, use concat filter with crossfade
             fade_start = target_duration - 3
-            cmd = [
-                'ffmpeg', '-stream_loop', str(loops_needed), '-i', input_path,
-                '-af', f'afade=t=out:st={original_duration-crossfade_duration}:d={crossfade_duration},afade=t=in:st=0:d={crossfade_duration},afade=t=out:st={fade_start}:d=3',
+
+            # Build input files for the loops needed
+            inputs = []
+            for i in range(min(loops_needed, 20)):  # Limit to 20 inputs for performance
+                inputs.extend(['-i', input_path])
+
+            # Build concat filter with crossfades
+            filter_parts = []
+            for i in range(1, min(loops_needed, 20)):
+                if i == 1:
+                    filter_parts.append(f"[0:a][1:a]acrossfade=d={crossfade_duration}[af1]")
+                    last_output = "[af1]"
+                else:
+                    filter_parts.append(f"{last_output}[{i}:a]acrossfade=d={crossfade_duration}[af{i}]")
+                    last_output = f"[af{i}]"
+
+            # Add final fade out
+            filter_parts.append(f"{last_output}afade=t=out:st={fade_start}:d=3[out]")
+            filter_complex = ";".join(filter_parts)
+
+            cmd = ['ffmpeg'] + inputs + [
+                '-filter_complex', filter_complex,
+                '-map', '[out]',
                 '-t', str(target_duration),
                 '-c:a', 'mp3', '-b:a', '320k',
                 '-y', output_path
