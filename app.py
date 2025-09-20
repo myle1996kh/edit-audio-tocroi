@@ -49,20 +49,31 @@ def process_audio_ffmpeg(input_path, output_path, target_minutes, crossfade_dura
         progress_callback(10, "🔍 Analyzing audio...")
 
     # Detect environment and use appropriate method
+    concat_file = None
     if is_streamlit_cloud():
-        # Streamlit Cloud compatible method - simpler approach
-        if progress_callback:
-            progress_callback(30, "🌐 Streamlit Cloud mode: Simple loop method...")
+        # Streamlit Cloud compatible method - use concat demuxer approach
+        loops_needed = int(target_duration / original_duration) + 1
 
-        # Use simple stream_loop with basic fade
-        fade_start = target_duration - 3
-        cmd = [
-            'ffmpeg', '-stream_loop', '-1', '-i', input_path,
-            '-af', f'afade=t=out:st={fade_start}:d=3',
-            '-t', str(target_duration),
-            '-c:a', 'libmp3lame', '-b:a', '192k',
-            '-y', output_path
-        ]
+        if progress_callback:
+            progress_callback(30, f"🌐 Streamlit Cloud mode: concat method ({loops_needed} loops)...")
+
+        # Create a file list for concat demuxer (more reliable than stream_loop)
+        concat_file = f"temp_concat_{int(time.time())}.txt"
+        try:
+            with open(concat_file, 'w') as f:
+                for i in range(loops_needed):
+                    f.write(f"file '{input_path}'\n")
+
+            fade_start = target_duration - 3
+            cmd = [
+                'ffmpeg', '-f', 'concat', '-safe', '0', '-i', concat_file,
+                '-af', f'afade=t=out:st={fade_start}:d=3',
+                '-t', str(target_duration),
+                '-c:a', 'libmp3lame', '-b:a', '192k',
+                '-y', output_path
+            ]
+        except Exception as e:
+            return False, f"Failed to create concat file: {str(e)}"
     else:
         # Local development - use advanced crossfade
         loops_needed = max(2, int(target_duration / original_duration) + 1)
@@ -119,7 +130,7 @@ def process_audio_ffmpeg(input_path, output_path, target_minutes, crossfade_dura
             progress_callback(90, "✅ Finalizing...")
 
         if result.returncode == 0 and os.path.exists(output_path):
-            method_used = "Streamlit Simple Loop" if is_streamlit_cloud() else f"Local Crossfade (d={crossfade_duration})"
+            method_used = "Streamlit Concat Method" if is_streamlit_cloud() else f"Local Crossfade (d={crossfade_duration})"
             return True, f"Success! {method_used}"
         else:
             return False, f"FFmpeg error: {result.stderr[:200] if result.stderr else 'Unknown error'}"
@@ -128,6 +139,13 @@ def process_audio_ffmpeg(input_path, output_path, target_minutes, crossfade_dura
         return False, "Processing timeout - try shorter duration"
     except Exception as e:
         return False, f"Processing error: {str(e)}"
+    finally:
+        # Clean up concat file if it exists
+        if concat_file and os.path.exists(concat_file):
+            try:
+                os.unlink(concat_file)
+            except:
+                pass  # Ignore cleanup errors
 
 def create_percentage_progress(current, total, message):
     """Create percentage-based progress display"""
